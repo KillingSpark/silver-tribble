@@ -1,4 +1,4 @@
-use std::net::UdpSocket;
+use std::{net::UdpSocket, sync::Arc};
 
 use crate::engine::graph::{GraphPacketQueue, NodeId};
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -12,7 +12,7 @@ pub struct Socket {
     socket: UdpSocket,
 
     target_node_id: NodeId,
-    packet_queue: GraphPacketQueue<NetworkPacket>,
+    packet_queue: Arc<GraphPacketQueue<NetworkPacket>>,
 }
 
 impl Socket {
@@ -23,7 +23,7 @@ impl Socket {
     pub fn new(
         socket: UdpSocket,
         target_node_id: NodeId,
-        packet_queue: GraphPacketQueue<NetworkPacket>,
+        packet_queue: Arc<GraphPacketQueue<NetworkPacket>>,
     ) -> Self {
         socket.set_nonblocking(true).unwrap();
         Self {

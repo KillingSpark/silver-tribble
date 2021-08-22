@@ -1,4 +1,5 @@
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -11,17 +12,18 @@ use crate::engine::graph::PacketQueue;
 pub struct GraphMaintainer<PacketData: Send, NodeData: AcceptWork<PacketData> + Send> {
     graph: Arc<Graph<PacketData, NodeData>>,
 
+    worker_id_counter: AtomicUsize,
+
     stop_threads: Arc<AtomicBool>,
 }
 
-impl<
-        PacketData: Send + 'static,
-        NodeData: AcceptWork<PacketData> + Send + 'static,
-    > GraphMaintainer<PacketData, NodeData>
+impl<PacketData: Send + 'static, NodeData: AcceptWork<PacketData> + Send + 'static>
+    GraphMaintainer<PacketData, NodeData>
 {
     pub fn new() -> Self {
         Self {
             graph: Arc::new(Graph::new()),
+            worker_id_counter: AtomicUsize::new(0),
             stop_threads: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -35,24 +37,31 @@ impl<
     }
 
     pub fn run_threads(&self, num_threads: usize) -> Vec<JoinHandle<()>> {
-        (0..num_threads)
+        let x = (0..num_threads)
             .into_iter()
             .map(|_| {
                 let g = Arc::clone(&self.graph);
                 let stop = Arc::clone(&self.stop_threads);
-                std::thread::spawn(move || run_worker_thread(g, stop))
+                let id = self.worker_id_counter.fetch_add(1, Ordering::Relaxed);
+                std::thread::spawn(move || run_worker_thread(g, id, stop))
             })
-            .collect()
+            .collect();
+
+        self.graph
+            .use_queues(self.worker_id_counter.load(Ordering::Relaxed));
+
+        x
     }
 }
 
 fn run_worker_thread<PacketData: Send, NodeData: AcceptWork<PacketData> + Send>(
     g: Arc<Graph<PacketData, NodeData>>,
+    worker_id: usize,
     stop: Arc<AtomicBool>,
 ) {
     let mut further_packets = PacketQueue::new();
     loop {
-        g.tick(&mut further_packets);
+        g.tick(worker_id, &mut further_packets);
 
         if stop.load(Ordering::Relaxed) {
             break;

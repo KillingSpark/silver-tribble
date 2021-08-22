@@ -13,9 +13,7 @@ pub trait AcceptWork<PacketData: Send> {
     fn do_work(&mut self, packet: PacketData, further_packets: &mut PacketQueue<PacketData>);
 }
 
-impl<PacketData: Send> AcceptWork<PacketData>
-    for Box<dyn AcceptWork<PacketData> + Send>
-{
+impl<PacketData: Send> AcceptWork<PacketData> for Box<dyn AcceptWork<PacketData> + Send> {
     fn do_work(&mut self, packet: PacketData, further_packets: &mut PacketQueue<PacketData>) {
         let this: &mut dyn AcceptWork<_> = self.as_mut();
         this.do_work(packet, further_packets)
@@ -73,32 +71,67 @@ impl<PacketData: Send> PacketQueue<PacketData> {
     }
 }
 
-pub struct Graph<PacketData: Send, NodeData: AcceptWork<PacketData> + Send> {
-    nodes: SpinRwLock<HashMap<NodeId, ArcSwap<Node<PacketData, NodeData>>>>,
-    work_packets: Arc<SpinLock<PacketQueue<PacketData>>>,
-
-    id_counter: AtomicUsize,
+pub struct GraphPacketQueue<PacketData: Send> {
+    queues: SpinRwLock<Vec<SpinLock<PacketQueue<PacketData>>>>,
 }
 
-pub struct GraphPacketQueue<PacketData: Send>(Arc<SpinLock<PacketQueue<PacketData>>>);
-
 impl<PacketData: Send> GraphPacketQueue<PacketData> {
+    /// Put packets for the same node in the same queue so a node is likely to be processed by the same thread
     pub fn push(&self, node_id: NodeId, packet: PacketData) {
-        self.0.as_ref().lock().get().push(node_id, packet);
+        let queues = self.queues.read();
+        let idx = node_id.0 % queues.get().len();
+        let queue = queues.get()[idx].lock();
+        queue.get().push(node_id, packet);
     }
+
+    fn push_packet(&self, packet: WorkPacket<PacketData>) {
+        let queues = self.queues.read();
+        let idx = packet.for_node.0 % queues.get().len();
+        let queue = queues.get()[idx].lock();
+        queue.get().push_packet(packet);
+    }
+
+    pub fn pop(&self, worker_id: usize) -> Option<WorkPacket<PacketData>> {
+        let queues = self.queues.read();
+
+        // start looking in "own" queue but take packets from other queues if nothing is left in "own" queue
+        let start_idx = worker_id % queues.get().len();
+
+        for idx in 0..queues.get().len() {
+            let idx = idx.wrapping_add(start_idx) % queues.get().len();
+            if let Some(packet) = queues.get()[idx].lock().get().pop() {
+                return Some(packet);
+            }
+        }
+        None
+    }
+
+    pub fn new(initial_queue: PacketQueue<PacketData>) -> Self {
+        Self {
+            queues: SpinRwLock::new(vec![SpinLock::new(initial_queue)]),
+        }
+    }
+}
+
+pub struct Graph<PacketData: Send, NodeData: AcceptWork<PacketData> + Send> {
+    nodes: SpinRwLock<HashMap<NodeId, ArcSwap<Node<PacketData, NodeData>>>>,
+
+    work_packets: Arc<GraphPacketQueue<PacketData>>,
+
+    id_counter: AtomicUsize,
 }
 
 impl<PacketData: Send, NodeData: AcceptWork<PacketData> + Send> Graph<PacketData, NodeData> {
     pub fn new() -> Self {
         Self {
             nodes: SpinRwLock::new(HashMap::new()),
-            work_packets: Arc::new(SpinLock::new(PacketQueue::new())),
+            work_packets: Arc::new(GraphPacketQueue::new(PacketQueue::new())),
             id_counter: AtomicUsize::new(0),
         }
     }
 
-    pub fn packet_queue(&self) -> GraphPacketQueue<PacketData> {
-        GraphPacketQueue(Arc::clone(&self.work_packets))
+    pub fn packet_queue(&self) -> Arc<GraphPacketQueue<PacketData>> {
+        Arc::clone(&self.work_packets)
     }
 
     fn next_id(&self) -> NodeId {
@@ -134,8 +167,19 @@ impl<PacketData: Send, NodeData: AcceptWork<PacketData> + Send> Graph<PacketData
         self.nodes.write().get().remove(&node_id);
     }
 
-    pub fn tick(&self, further_packets: &mut PacketQueue<PacketData>) {
-        if let Some(packet) = self.work_packets.lock().get().pop() {
+    pub fn use_queues(&self, want_queues: usize) {
+        let queues = self.work_packets.queues.write();
+        if queues.get().len() < want_queues {
+            let new_queues = want_queues - queues.get().len();
+            (0..new_queues).into_iter().for_each(|_| {
+                let queue = PacketQueue::new();
+                queues.get().push(SpinLock::new(queue));
+            })
+        }
+    }
+
+    pub fn tick(&self, worker_id: usize, further_packets: &mut PacketQueue<PacketData>) {
+        if let Some(packet) = self.work_packets.pop(worker_id) {
             self.process_packet(packet, further_packets);
         }
         while let Some(packet) = further_packets.pop() {
@@ -170,7 +214,7 @@ impl<PacketData: Send, NodeData: AcceptWork<PacketData> + Send> Graph<PacketData
 
     fn insert_packet(&self, packet: WorkPacket<PacketData>) {
         // TODO signaling
-        self.work_packets.lock().get().push_packet(packet)
+        self.work_packets.as_ref().push_packet(packet)
     }
 
     pub fn insert_work(&self, for_node: NodeId, packet: PacketData) {

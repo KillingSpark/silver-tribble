@@ -32,12 +32,13 @@ impl<T> SpinRwLock<T> {
             }
 
             let readers = self.readers.load(Ordering::Acquire);
-            let new_readers = readers + 1;
 
             // keep looping while writer is active
-            if new_readers == WRITER_ACTIVE {
+            if readers == WRITER_ACTIVE {
                 continue;
             }
+
+            let new_readers = readers + 1;
 
             if self
                 .readers
