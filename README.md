@@ -43,3 +43,6 @@ This would also allow for work stealing if for some reason different packets tak
 
 ### TODO 2.)
 Solve this in a similar fashion to 1.)
+
+### TODO Use atomic queues, stop using `SpinLock<VecDequeue>`
+The channels to the graph are just dumb locked vecdequeues. There are way better implementations out there which should be used instead.
