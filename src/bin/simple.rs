@@ -1,6 +1,6 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
-use graph_processing::engine::graph::{ AcceptWork, PacketQueue};
+use graph_processing::engine::graph::{ AcceptWork, LocalPacketQueue};
 use graph_processing::engine::graph_maintainer;
 
 fn main() {
@@ -8,7 +8,7 @@ fn main() {
     struct Packet(usize);
 
     impl AcceptWork<Packet> for Receiver {
-        fn do_work(&mut self, _packet: Packet, _further_packets: &mut PacketQueue<Packet>) {
+        fn do_work(&mut self, _packet: Packet, _further_packets: &mut LocalPacketQueue<Packet>) {
             //println!("Receiver {} got packet: {}", self.0, packet.0);
             self.1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }

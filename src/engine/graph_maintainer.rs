@@ -7,7 +7,7 @@ use std::usize;
 
 use crate::engine::graph::AcceptWork;
 use crate::engine::graph::Graph;
-use crate::engine::graph::PacketQueue;
+use crate::engine::graph::LocalPacketQueue;
 
 pub struct GraphMaintainer<PacketData: Send, NodeData: AcceptWork<PacketData> + Send> {
     graph: Arc<Graph<PacketData, NodeData>>,
@@ -37,6 +37,9 @@ impl<PacketData: Send + 'static, NodeData: AcceptWork<PacketData> + Send + 'stat
     }
 
     pub fn run_threads(&self, num_threads: usize) -> Vec<JoinHandle<()>> {
+        self.graph
+            .use_queues(self.worker_id_counter.load(Ordering::Relaxed) + num_threads);
+
         let x = (0..num_threads)
             .into_iter()
             .map(|_| {
@@ -46,10 +49,6 @@ impl<PacketData: Send + 'static, NodeData: AcceptWork<PacketData> + Send + 'stat
                 std::thread::spawn(move || run_worker_thread(g, id, stop))
             })
             .collect();
-
-        self.graph
-            .use_queues(self.worker_id_counter.load(Ordering::Relaxed));
-
         x
     }
 }
@@ -59,9 +58,15 @@ fn run_worker_thread<PacketData: Send, NodeData: AcceptWork<PacketData> + Send>(
     worker_id: usize,
     stop: Arc<AtomicBool>,
 ) {
-    let mut further_packets = PacketQueue::new();
+    let mut further_packets = LocalPacketQueue::new();
     loop {
-        g.tick(worker_id, &mut further_packets);
+        // loop over workstealing try tick, until it reports that there was no more work
+        while g.try_tick(worker_id, &mut further_packets) {}
+
+        // then wait for an event on the "own" channel
+        // This won't block forever though to make sure threads can be stopped gracefully in a reasonable
+        // timeframe
+        g.tick_blocking(worker_id, &mut further_packets);
 
         if stop.load(Ordering::Relaxed) {
             break;

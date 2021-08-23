@@ -32,17 +32,11 @@ On the surface there is a lot of locking going on there. But the usecase lets us
 the only really congested nodes are the egress nodes and those do very little work, by offloading the network IO onto a separate thread pool.
 
 ## Sockets -> Graph -> Sockets
-These are the obvious bottlenecks in the design.
+All egress nodes push to the same channel to send packets to the network IO thread pool.
 
-1. All graph worker threads pull from the same graph-global queue to pass packets to the ingress nodes
-2. All egress nodes push to the same channel to send packets to the network IO thread pool
+Better would be to have multiple queues that get used more or less evenly, similar to how the communication towards the graph is solved.
 
-### TODO 1.)
-Solve this by adding one queue per graph worker thread and submit packets in a round-robin fashion.
-This would also allow for work stealing if for some reason different packets take a lot longer to process.
-
-### TODO 2.)
-Solve this in a similar fashion to 1.)
-
-### TODO Use atomic queues, stop using `SpinLock<VecDequeue>`
-The channels to the graph are just dumb locked vecdequeues. There are way better implementations out there which should be used instead.
+### TODO use ringbuffer queues that overwrite old messages in favor of new messages
+* ring-channel doesn't work well for this usecase because it requires &mut for send and recv
+* Implementing this on top of crossbeam_queue::ArrayQueue should be relatively straight forward
+* Doing my own impl of this might be fun

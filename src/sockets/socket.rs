@@ -9,7 +9,7 @@ pub struct NetworkPacket {
 }
 
 pub struct Socket {
-    socket: UdpSocket,
+    pub socket: UdpSocket,
 
     target_node_id: NodeId,
     packet_queue: Arc<GraphPacketQueue<NetworkPacket>>,

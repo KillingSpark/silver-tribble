@@ -21,6 +21,7 @@ impl<T> SpinLock<T> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn lock<'a>(&'a self) -> SpinLockGuard<'a, T> {
         loop {
             if self
@@ -33,6 +34,7 @@ impl<T> SpinLock<T> {
         }
         SpinLockGuard { lock: self }
     }
+
     pub fn try_lock<'a>(&'a self) -> Option<SpinLockGuard<'a, T>> {
         if self
             .locker

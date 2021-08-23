@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::os::unix::io::RawFd;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -8,7 +9,7 @@ use crate::sockets::socket::Socket;
 use nix::sys::epoll;
 use threadpool::ThreadPool;
 
-use std::sync::mpsc::{channel, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, Sender};
 
 use crate::sockets::socket::NetworkPacket;
 
@@ -20,7 +21,6 @@ pub struct SocketMaintainer {
 
     sockets: HashMap<SocketId, Arc<Socket>>,
     epoll_wrapper: EpollWrapper,
-    worker_pool: ThreadPool,
     send_packets: Receiver<(SocketId, NetworkPacket)>,
     send_packets_sender: Sender<(SocketId, NetworkPacket)>,
 }
@@ -51,13 +51,12 @@ impl EpollWrapper {
 
 impl SocketMaintainer {
     pub fn new() -> Self {
-        let (s, r) = channel();
+        let (s, r) = bounded(100);
         Self {
             id_counter: AtomicUsize::new(0),
 
             sockets: HashMap::new(),
             epoll_wrapper: EpollWrapper::new(),
-            worker_pool: ThreadPool::new(3),
             send_packets: r,
             send_packets_sender: s,
         }
@@ -82,26 +81,34 @@ impl SocketMaintainer {
         self.send_packets_sender.clone()
     }
 
-    pub fn run_receive(&self) {
+    pub fn run_receive(&self, worker_pool: &ThreadPool) {
         let mut ids = [SocketId(0); 64];
         loop {
             let ready_fds = self.epoll_wrapper.poll(&mut ids);
             for fd in ready_fds {
                 if let Some(sock) = self.sockets.get(fd) {
                     let sock = Arc::clone(sock);
-                    self.worker_pool
+                    worker_pool
                         .execute(move || sock.as_ref().read_and_push())
                 }
             }
         }
     }
 
-    pub fn run_send(&self) {
+    pub fn run_send(&self, worker_pool: &ThreadPool) {
         loop {
-            let (fd, packet) = self.send_packets.recv().unwrap();
-            if let Some(sock) = self.sockets.get(&fd) {
+            let (sock_id, packet) = self.send_packets.recv().unwrap();
+            if let Some(sock) = self.sockets.get(&sock_id) {
+                sock.as_ref()
+                    .socket
+                    .connect(SocketAddr::from((
+                        [127, 0, 0, 1],
+                        sock.socket.local_addr().unwrap().port() + 100,
+                    )))
+                    .unwrap();
+
                 let sock = Arc::clone(sock);
-                self.worker_pool
+                worker_pool
                     .execute(move || sock.as_ref().write(packet))
             }
         }
