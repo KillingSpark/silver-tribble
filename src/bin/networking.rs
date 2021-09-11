@@ -8,6 +8,7 @@ use graph_processing::engine::graph_maintainer::{self, GraphMaintainer};
 use graph_processing::sockets::read_sockets::{SocketId, SocketMaintainer};
 use graph_processing::sockets::socket::{NetworkPacket, Socket};
 
+#[derive(Debug)]
 struct LoggingNode {
     next_node: NodeId,
 }
@@ -23,6 +24,9 @@ impl AcceptWork<NetworkPacket> for LoggingNode {
     }
 }
 
+impl NodeData for LoggingNode {}
+
+#[derive(Debug)]
 struct DropNode {}
 
 impl AcceptWork<NetworkPacket> for DropNode {
@@ -35,6 +39,9 @@ impl AcceptWork<NetworkPacket> for DropNode {
     }
 }
 
+impl NodeData for DropNode {}
+
+#[derive(Debug)]
 struct MulticastNode {
     next_nodes: Vec<NodeId>,
 }
@@ -52,6 +59,9 @@ impl AcceptWork<NetworkPacket> for MulticastNode {
     }
 }
 
+impl NodeData for MulticastNode {}
+
+#[derive(Debug)]
 struct EgressNode {
     socket_id: SocketId,
     channel: crossbeam_channel::Sender<(SocketId, NetworkPacket)>,
@@ -68,7 +78,22 @@ impl AcceptWork<NetworkPacket> for EgressNode {
     }
 }
 
-type NodeType = Box<dyn AcceptWork<NetworkPacket> + Send>;
+impl NodeData for EgressNode {}
+
+trait NodeData: AcceptWork<NetworkPacket> + Send + std::fmt::Debug {}
+type NodeType = Box<dyn NodeData + Send>;
+
+// apparently necessary to spell this out.
+impl AcceptWork<NetworkPacket> for NodeType {
+    fn do_work(
+        &mut self,
+        packet: NetworkPacket,
+        further_packets: &mut LocalPacketQueue<NetworkPacket>,
+    ) {
+        self.as_mut().do_work(packet, further_packets)
+    }
+}
+
 type GM = GraphMaintainer<NetworkPacket, NodeType>;
 
 struct Server {
@@ -108,12 +133,15 @@ impl Server {
             channel: self.sockets.send_packets_channel(),
         }));
 
-        self.graph.get().update_node(
-            ingress_id,
-            Box::new(MulticastNode {
-                next_nodes: vec![egress_id],
-            }),
-        );
+        self.graph
+            .get()
+            .replace_node(
+                ingress_id,
+                Box::new(MulticastNode {
+                    next_nodes: vec![egress_id],
+                }),
+            )
+            .unwrap();
 
         self.port_to_ingress_node.insert(port, ingress_id);
         self.port_to_egress_node.insert(port, egress_id);
@@ -148,11 +176,10 @@ fn main() {
     let worker_pool1 = threadpool::ThreadPool::new(3);
     let worker_pool2 = worker_pool1.clone();
 
-
     std::thread::spawn(move || {
         server1.run_receiver_sockets(&worker_pool1);
     });
-    
+
     std::thread::spawn(move || {
         server2.run_sender_sockets(&worker_pool2);
     });
@@ -172,16 +199,15 @@ fn send_packets() {
             .unwrap();
         socks.push(socket);
     }
-    
+
     for sock in socks {
         std::thread::spawn(move || loop {
-
             for _ in 0..10 {
                 let send_time = std::time::Instant::now();
                 sock.send("THIS IS A MESSAGE!".as_bytes()).unwrap();
-                sock.recv(&mut [0,0,0,0]).unwrap();
+                sock.recv(&mut [0, 0, 0, 0]).unwrap();
                 let recv_time = std::time::Instant::now();
-                
+
                 eprintln!(
                     "Took {:?} to ping pong",
                     recv_time.duration_since(send_time)

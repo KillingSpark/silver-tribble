@@ -1,9 +1,10 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
-use graph_processing::engine::graph::{ AcceptWork, LocalPacketQueue};
+use graph_processing::engine::graph::{AcceptWork, LocalPacketQueue};
 use graph_processing::engine::graph_maintainer;
 
 fn main() {
+    #[derive(Debug)]
     struct Receiver(usize, Arc<AtomicUsize>);
     struct Packet(usize);
 
@@ -28,7 +29,8 @@ fn main() {
 
     maintainer
         .get()
-        .update_node(id, Receiver(10, call_counter.clone()));
+        .replace_node(id, Receiver(10, call_counter.clone()))
+        .unwrap();
 
     println!("Updated node");
 

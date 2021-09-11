@@ -1,4 +1,9 @@
-use std::{collections::{HashMap, VecDeque}, marker::PhantomData, ops::Add, sync::{atomic::AtomicUsize, Arc}};
+use std::{
+    collections::{HashMap, VecDeque},
+    marker::PhantomData,
+    ops::Add,
+    sync::{atomic::AtomicUsize, Arc},
+};
 
 use arc_swap::{ArcSwap, AsRaw};
 
@@ -102,7 +107,9 @@ impl<PacketData: Send> GraphPacketQueue<PacketData> {
             std::mem::drop(queues);
             queue
         };
-        queue.recv_deadline(std::time::Instant::now().add(std::time::Duration::from_millis(10))).ok()
+        queue
+            .recv_deadline(std::time::Instant::now().add(std::time::Duration::from_millis(10)))
+            .ok()
     }
 
     pub fn try_pop(&self, worker_id: usize) -> Option<WorkPacket<PacketData>> {
@@ -156,6 +163,7 @@ impl<PacketData: Send, NodeData: AcceptWork<PacketData> + Send> Graph<PacketData
         NodeId::new(id)
     }
 
+    /// Insert a new node. returns the allocated node id, that can now be used to refer to this node.
     pub fn insert_node(&self, data: NodeData) -> NodeId {
         let id = self.next_id();
         self.nodes
@@ -165,7 +173,27 @@ impl<PacketData: Send, NodeData: AcceptWork<PacketData> + Send> Graph<PacketData
         id
     }
 
-    pub fn update_node(&self, node_id: NodeId, data: NodeData) {
+    /// Read the node and return what ever you want.
+    /// Returns Ok with the return value of `read` if the id existed, and Err if not
+    pub fn read_node<F, R>(&self, node_id: NodeId, read: F) -> Result<R, ()>
+    where
+        F: FnOnce(&NodeData) -> R,
+    {
+        // This is currently the same as update_node because the nodes are not behind a rw lock. But that's probably okay anyways.
+        // The whole interaction with the nodes isn't expected to be happening a lot. The graphs main focus is actually processing packets.
+        if let Some(node) = self.nodes.read().get().get(&node_id) {
+            let node = node.load();
+            let locked_node = node.inner.lock();
+            Ok(read(locked_node.get()))
+        } else {
+            Err(())
+        }
+    }
+
+    /// Fast replace by just atomically swapping the node referenced by the id.
+    /// The old node will be dropped once nothing else is using it.
+    /// Returns Ok if the id existed, and Err with the node data if not
+    pub fn replace_node(&self, node_id: NodeId, data: NodeData) -> Result<(), NodeData> {
         if let Some(node) = self.nodes.read().get().get(&node_id) {
             let new = Arc::new(Node::new(data));
             loop {
@@ -175,6 +203,24 @@ impl<PacketData: Send, NodeData: AcceptWork<PacketData> + Send> Graph<PacketData
                     break;
                 }
             }
+            Ok(())
+        } else {
+            Err(data)
+        }
+    }
+
+    /// Maybe slower updating than `replace_node` but you get access to the node
+    /// Returns Ok with the return value of `update` if the id existed, and Err if not
+    pub fn update_node<F, R>(&self, node_id: NodeId, update: F) -> Result<R, ()>
+    where
+        F: FnOnce(&mut NodeData) -> R,
+    {
+        if let Some(node) = self.nodes.read().get().get(&node_id) {
+            let node = node.load();
+            let locked_node = node.inner.lock();
+            Ok(update(locked_node.get()))
+        } else {
+            Err(())
         }
     }
 
@@ -193,7 +239,11 @@ impl<PacketData: Send, NodeData: AcceptWork<PacketData> + Send> Graph<PacketData
         }
     }
 
-    pub fn tick_blocking(&self, worker_id: usize, further_packets: &mut LocalPacketQueue<PacketData>) -> bool {
+    pub fn tick_blocking(
+        &self,
+        worker_id: usize,
+        further_packets: &mut LocalPacketQueue<PacketData>,
+    ) -> bool {
         if let Some(packet) = self.work_packets.try_pop(worker_id) {
             self.process_packet(packet, further_packets);
             while let Some(packet) = further_packets.pop() {
