@@ -19,7 +19,6 @@ impl AcceptWork<NetworkPacket> for LoggingNode {
         packet: NetworkPacket,
         further_packets: &mut LocalPacketQueue<NetworkPacket>,
     ) {
-        eprintln!("Received packet of size: {}", packet.data.len());
         further_packets.push(self.next_node, packet)
     }
 }
@@ -52,9 +51,12 @@ impl AcceptWork<NetworkPacket> for MulticastNode {
         packet: NetworkPacket,
         further_packets: &mut LocalPacketQueue<NetworkPacket>,
     ) {
-        eprintln!("Multicast packet to: {:?}", self.next_nodes);
-        for next_node in self.next_nodes.iter() {
-            further_packets.push(*next_node, packet.clone())
+        if self.next_nodes.len() == 1 {
+            further_packets.push(self.next_nodes[0], packet);
+        } else {
+            for next_node in self.next_nodes.iter() {
+                further_packets.push(*next_node, packet.clone())
+            }
         }
     }
 }
@@ -73,7 +75,6 @@ impl AcceptWork<NetworkPacket> for EgressNode {
         packet: NetworkPacket,
         _further_packets: &mut LocalPacketQueue<NetworkPacket>,
     ) {
-        eprintln!("Sending packet of size: {}", packet.data.len());
         self.channel.send((self.socket_id, packet)).unwrap();
     }
 }
@@ -147,12 +148,12 @@ impl Server {
         self.port_to_egress_node.insert(port, egress_id);
     }
 
-    fn run_receiver_sockets(&self, worker_pool: &threadpool::ThreadPool) {
-        self.sockets.run_receive(worker_pool);
+    fn run_receiver_sockets(&self, worker_threads: usize) {
+        self.sockets.run_receive(worker_threads);
     }
 
-    fn run_sender_sockets(&self, worker_pool: &threadpool::ThreadPool) {
-        self.sockets.run_send(worker_pool);
+    fn run_sender_sockets(&self, worker_threads: usize) {
+        self.sockets.run_send(worker_threads);
     }
 }
 
@@ -173,15 +174,12 @@ fn main() {
     let server1 = Arc::new(server);
     let server2 = Arc::clone(&server1);
 
-    let worker_pool1 = threadpool::ThreadPool::new(3);
-    let worker_pool2 = worker_pool1.clone();
-
     std::thread::spawn(move || {
-        server1.run_receiver_sockets(&worker_pool1);
+        server1.run_receiver_sockets(2);
     });
 
     std::thread::spawn(move || {
-        server2.run_sender_sockets(&worker_pool2);
+        server2.run_sender_sockets(2);
     });
 
     loop {
@@ -191,7 +189,7 @@ fn main() {
 
 fn send_packets() {
     let mut socks = vec![];
-    for port in 3500..3501 {
+    for port in 3500..3600 {
         let socket = UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], port)))
             .expect("Couldn't bind to address");
         socket
@@ -202,7 +200,7 @@ fn send_packets() {
 
     for sock in socks {
         std::thread::spawn(move || loop {
-            for _ in 0..10 {
+            for _ in 0..100 {
                 let send_time = std::time::Instant::now();
                 sock.send("THIS IS A MESSAGE!".as_bytes()).unwrap();
                 sock.recv(&mut [0, 0, 0, 0]).unwrap();
@@ -214,7 +212,7 @@ fn send_packets() {
                 );
             }
 
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            //std::thread::sleep(std::time::Duration::from_secs(2));
         });
     }
 }

@@ -7,10 +7,10 @@ use std::sync::Arc;
 use crate::sockets::socket::Socket;
 
 use nix::sys::epoll;
-use threadpool::ThreadPool;
 
 use crossbeam_channel::{bounded, Receiver, Sender};
 
+use crate::engine::spin_rw::SpinRwLock;
 use crate::sockets::socket::NetworkPacket;
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
@@ -19,8 +19,8 @@ pub struct SocketId(usize);
 pub struct SocketMaintainer {
     id_counter: AtomicUsize,
 
-    sockets: HashMap<SocketId, Arc<Socket>>,
-    epoll_wrapper: EpollWrapper,
+    sockets: Arc<SpinRwLock<HashMap<SocketId, Arc<Socket>>>>,
+    epoll_wrapper: Arc<EpollWrapper>,
     send_packets: Receiver<(SocketId, NetworkPacket)>,
     send_packets_sender: Sender<(SocketId, NetworkPacket)>,
 }
@@ -55,8 +55,8 @@ impl SocketMaintainer {
         Self {
             id_counter: AtomicUsize::new(0),
 
-            sockets: HashMap::new(),
-            epoll_wrapper: EpollWrapper::new(),
+            sockets: Arc::new(SpinRwLock::new(HashMap::new())),
+            epoll_wrapper: Arc::new(EpollWrapper::new()),
             send_packets: r,
             send_packets_sender: s,
         }
@@ -72,7 +72,7 @@ impl SocketMaintainer {
     pub fn insert(&mut self, socket: Socket) -> SocketId {
         let id = self.next_id();
         let fd = socket.get_fd();
-        self.sockets.insert(id, Arc::new(socket));
+        self.sockets.write().get().insert(id, Arc::new(socket));
         self.epoll_wrapper.add_fd(fd, id);
         id
     }
@@ -81,36 +81,47 @@ impl SocketMaintainer {
         self.send_packets_sender.clone()
     }
 
-    pub fn run_receive(&self, worker_pool: &ThreadPool) {
-        let mut ids = [SocketId(0); 64];
-        loop {
-            let ready_fds = self.epoll_wrapper.poll(&mut ids);
-            for fd in ready_fds {
-                if let Some(sock) = self.sockets.get(fd) {
-                    let sock = Arc::clone(sock);
-                    worker_pool
-                        .execute(move || sock.as_ref().read_and_push())
+    pub fn run_receive(&self, worker_threads: usize) {
+        for _ in 0..worker_threads {
+            let socks = Arc::clone(&self.sockets);
+            let epoll = Arc::clone(&self.epoll_wrapper);
+            std::thread::spawn(move || {
+                let mut ids = [SocketId(0); 64];
+                loop {
+                    let ready_fds = epoll.poll(&mut ids);
+                    for fd in ready_fds {
+                        if let Some(sock) = socks.read().get().get(fd) {
+                            sock.read_and_push();
+                        }
+                    }
                 }
-            }
+            });
         }
     }
 
-    pub fn run_send(&self, worker_pool: &ThreadPool) {
-        loop {
-            let (sock_id, packet) = self.send_packets.recv().unwrap();
-            if let Some(sock) = self.sockets.get(&sock_id) {
-                sock.as_ref()
-                    .socket
-                    .connect(SocketAddr::from((
-                        [127, 0, 0, 1],
-                        sock.socket.local_addr().unwrap().port() + 100,
-                    )))
-                    .unwrap();
+    pub fn run_send(&self, worker_threads: usize) {
+        for _ in 0..worker_threads {
+            let work_recv = self.send_packets.clone();
+            let socks = Arc::clone(&self.sockets);
+            std::thread::spawn(move || {
+                loop {
+                    let (sock_id, packet) = work_recv.recv().unwrap();
+                    if let Some(sock) = socks.read().get().get(&sock_id) {
+                        sock.as_ref()
+                            .socket
+                            .connect(SocketAddr::from((
+                                [127, 0, 0, 1],
+                                sock.socket.local_addr().unwrap().port() + 100,
+                            )))
+                            .unwrap();
 
-                let sock = Arc::clone(sock);
-                worker_pool
-                    .execute(move || sock.as_ref().write(packet))
-            }
+                        sock.write(packet);
+                        //let sock = Arc::clone(sock);
+                        //worker_pool
+                        //    .execute(move || sock.as_ref().write(packet))
+                    }
+                }
+            });
         }
     }
 }

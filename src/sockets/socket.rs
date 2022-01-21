@@ -36,7 +36,6 @@ impl Socket {
     pub fn read_and_push(&self) {
         let mut buf = vec![0u8;1472];
         if let Ok(bytes) = self.socket.recv(&mut buf[..]) {
-            println!("Read {} bytes from socket: {}", bytes, self.get_fd());
             buf.truncate(bytes);
             let packet = NetworkPacket {
                 data: buf,
