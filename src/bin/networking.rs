@@ -203,9 +203,10 @@ fn send_packets(start_port: u16, num_ports: u16) {
 
     for sock in socks {
         std::thread::spawn(move || loop {
+            let message = vec![0u8;1024];
             for _ in 0..1 {
                 let send_time = std::time::Instant::now();
-                sock.send("THIS IS A MESSAGE!".as_bytes()).unwrap();
+                sock.send(&message).unwrap();
                 sock.recv(&mut [0, 0, 0, 0]).unwrap();
                 let recv_time = std::time::Instant::now();
 
