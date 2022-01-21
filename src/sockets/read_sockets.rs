@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::os::unix::io::RawFd;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
