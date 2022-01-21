@@ -179,13 +179,8 @@ fn main() {
     let server1 = Arc::new(server);
     let server2 = Arc::clone(&server1);
 
-    std::thread::spawn(move || {
-        server1.run_receiver_sockets(2);
-    });
-
-    std::thread::spawn(move || {
-        server2.run_sender_sockets(2);
-    });
+    server1.run_receiver_sockets(2);
+    server2.run_sender_sockets(2);
 
     loop {
         std::thread::sleep(std::time::Duration::from_secs(100000));
@@ -204,22 +199,25 @@ fn send_packets(start_port: u16, num_ports: u16) {
         socks.push(socket);
     }
 
-    for sock in socks {
-        std::thread::spawn(move || loop {
-            let message = vec![0u8; 1024];
-            for _ in 0..1 {
-                let send_time = std::time::Instant::now();
-                sock.send(&message).unwrap();
-                sock.recv(&mut [0, 0, 0, 0]).unwrap();
-                let recv_time = std::time::Instant::now();
+    for (idx, sock) in socks.into_iter().enumerate() {
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis((idx * 10) as u64));
+            loop {
+                let message = vec![0u8; 1024];
+                for _ in 0..3 {
+                    let send_time = std::time::Instant::now();
+                    sock.send(&message).unwrap();
+                    sock.recv(&mut [0, 0, 0, 0]).unwrap();
+                    let recv_time = std::time::Instant::now();
 
-                eprintln!(
-                    "Took {:?} to ping pong",
-                    recv_time.duration_since(send_time)
-                );
+                    eprintln!(
+                        "Took {:?} to ping pong",
+                        recv_time.duration_since(send_time)
+                    );
+                }
+
+                std::thread::sleep(std::time::Duration::from_millis(2000));
             }
-
-            std::thread::sleep(std::time::Duration::from_secs(2));
         });
     }
 }
