@@ -34,6 +34,7 @@ impl Socket {
     }
 
     pub fn read_and_push(&self) {
+        // TODO use pool for these vecs!
         let mut buf = vec![0u8;1472];
         if let Ok(bytes) = self.socket.recv(&mut buf[..]) {
             buf.truncate(bytes);
