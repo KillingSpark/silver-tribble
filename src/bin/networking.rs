@@ -152,8 +152,8 @@ impl Server {
         self.sockets.run_receive(worker_threads);
     }
 
-    fn run_sender_sockets(&self, worker_threads: usize) {
-        self.sockets.run_send(worker_threads);
+    fn run_sender_sockets(&self, num_ports: u16, worker_threads: usize) {
+        self.sockets.run_send(num_ports, worker_threads);
     }
 }
 
@@ -165,11 +165,13 @@ fn main() {
     eprintln!("Create server");
     let mut server = Server::new(g, SocketMaintainer::new());
 
-    for port in 3400..3500 {
+    let start_port = 2000;
+    let num_ports = 500;
+    for port in start_port..start_port + num_ports {
         server.add_socket(port);
     }
 
-    send_packets();
+    send_packets(start_port, num_ports);
 
     let server1 = Arc::new(server);
     let server2 = Arc::clone(&server1);
@@ -179,7 +181,7 @@ fn main() {
     });
 
     std::thread::spawn(move || {
-        server2.run_sender_sockets(2);
+        server2.run_sender_sockets(num_ports, 2);
     });
 
     loop {
@@ -187,20 +189,21 @@ fn main() {
     }
 }
 
-fn send_packets() {
+fn send_packets(start_port: u16, num_ports: u16) {
     let mut socks = vec![];
-    for port in 3500..3600 {
+    for port in start_port + num_ports..start_port + num_ports + num_ports {
+        eprintln!("Connect port {} to {}", port, port - num_ports);
         let socket = UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], port)))
             .expect("Couldn't bind to address");
         socket
-            .connect(SocketAddr::from(([127, 0, 0, 1], port - 100)))
+            .connect(SocketAddr::from(([127, 0, 0, 1], port - num_ports)))
             .unwrap();
         socks.push(socket);
     }
 
     for sock in socks {
         std::thread::spawn(move || loop {
-            for _ in 0..100 {
+            for _ in 0..1 {
                 let send_time = std::time::Instant::now();
                 sock.send("THIS IS A MESSAGE!".as_bytes()).unwrap();
                 sock.recv(&mut [0, 0, 0, 0]).unwrap();
@@ -212,7 +215,7 @@ fn send_packets() {
                 );
             }
 
-            //std::thread::sleep(std::time::Duration::from_secs(2));
+            std::thread::sleep(std::time::Duration::from_secs(2));
         });
     }
 }

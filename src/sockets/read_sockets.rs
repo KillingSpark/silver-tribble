@@ -99,7 +99,7 @@ impl SocketMaintainer {
         }
     }
 
-    pub fn run_send(&self, worker_threads: usize) {
+    pub fn run_send(&self, num_ports: u16, worker_threads: usize) {
         for _ in 0..worker_threads {
             let work_recv = self.send_packets.clone();
             let socks = Arc::clone(&self.sockets);
@@ -111,7 +111,7 @@ impl SocketMaintainer {
                             .socket
                             .connect(SocketAddr::from((
                                 [127, 0, 0, 1],
-                                sock.socket.local_addr().unwrap().port() + 100,
+                                sock.socket.local_addr().unwrap().port() + num_ports,
                             )))
                             .unwrap();
 
