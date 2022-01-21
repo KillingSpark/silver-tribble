@@ -115,9 +115,12 @@ impl Server {
         }
     }
 
-    fn add_socket(&mut self, port: u16) {
+    fn add_socket(&mut self, port: u16, num_ports: u16) {
         let socket = UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], port)))
             .expect("Couldn't bind to address");
+        socket
+            .connect(SocketAddr::from(([127, 0, 0, 1], port + num_ports)))
+            .unwrap();
 
         let ingress_id = self.graph.get().insert_node(Box::new(DropNode {}));
 
@@ -152,8 +155,8 @@ impl Server {
         self.sockets.run_receive(worker_threads);
     }
 
-    fn run_sender_sockets(&self, num_ports: u16, worker_threads: usize) {
-        self.sockets.run_send(num_ports, worker_threads);
+    fn run_sender_sockets(&self, worker_threads: usize) {
+        self.sockets.run_send(worker_threads);
     }
 }
 
@@ -168,7 +171,7 @@ fn main() {
     let start_port = 2000;
     let num_ports = 500;
     for port in start_port..start_port + num_ports {
-        server.add_socket(port);
+        server.add_socket(port, num_ports);
     }
 
     send_packets(start_port, num_ports);
@@ -181,7 +184,7 @@ fn main() {
     });
 
     std::thread::spawn(move || {
-        server2.run_sender_sockets(num_ports, 2);
+        server2.run_sender_sockets(2);
     });
 
     loop {
@@ -203,7 +206,7 @@ fn send_packets(start_port: u16, num_ports: u16) {
 
     for sock in socks {
         std::thread::spawn(move || loop {
-            let message = vec![0u8;1024];
+            let message = vec![0u8; 1024];
             for _ in 0..1 {
                 let send_time = std::time::Instant::now();
                 sock.send(&message).unwrap();
